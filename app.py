@@ -1,64 +1,75 @@
 import streamlit as st
 import numpy as np
-import nltk
-from nltk.corpus import stopwords
-from nltk.stem import PorterStemmer
-from nltk.tokenize import word_tokenize, sent_tokenize
 from tensorflow.keras.datasets import imdb
 from tensorflow.keras.preprocessing.sequence import pad_sequences
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import Embedding, LSTM, Dense, Dropout
+from tensorflow.keras.models import load_model
 
 # ------------------------------
-# Load and preprocess dataset
+# Parameters
+# ------------------------------
+max_features = 10000  # number of words to keep from IMDB
+maxlen = 200          # sequence length
+
+# Load IMDB word index with offset
+word_index = imdb.get_word_index()
+word_index = {k: (v + 3) for k, v in word_index.items()}  # shift by 3
+word_index["<PAD>"] = 0
+word_index["<START>"] = 1
+word_index["<UNK>"] = 2
+word_index["<UNUSED>"] = 3
+
+reverse_word_index = {v: k for k, v in word_index.items()}
+
+# Load trained model
+@st.cache_resource
+def load_sentiment_model():
+    return load_model("model.h5")
+
+model = load_sentiment_model()
+
+# ------------------------------
+# Helper functions
+# ------------------------------
+def encode_review(text):
+    """Convert review text into integer sequence using IMDB word index."""
+    words = text.lower().split()
+    encoded = [1]  # start token
+    for w in words:
+        idx = word_index.get(w, 2)  # 2 = <UNK>
+        encoded.append(idx)
+    return encoded
+
+def decode_review(encoded):
+    """Convert integers back to words (for debug)."""
+    return " ".join([reverse_word_index.get(i, "?") for i in encoded])
+
+# ------------------------------
+# Streamlit UI
 # ------------------------------
 st.title("🎬 IMDB Sentiment Analysis with LSTM")
 
-if st.button("Load Dataset"):
-    (X_train, y_train), (X_test, y_test) = imdb.load_data(num_words=10000)
-    st.success(f"Dataset Loaded ✅\nTraining samples: {len(X_train)}, Test samples: {len(X_test)}")
+user_review = st.text_area("✍️ Enter a movie review for sentiment analysis:")
 
-    maxlen = 200
-    X_train = pad_sequences(X_train, maxlen=maxlen)
-    X_test = pad_sequences(X_test, maxlen=maxlen)
+if st.button("Predict Sentiment"):
+    if user_review.strip() == "":
+        st.warning("⚠️ Please enter a review first.")
+    else:
+        # Encode review with correct offset
+        encoded = encode_review(user_review)
+        unk_count = encoded.count(2)
+        padded = pad_sequences([encoded], maxlen=maxlen)
 
-    st.write("Sequences padded to length:", maxlen)
+        # Predict
+        prediction = float(model.predict(padded)[0][0])
+        st.write(f"🔢 Raw score: {prediction:.4f} (0=Negative, 1=Positive)")
+        st.write(f"❓ Unknown words in your review: {unk_count}")
 
-# ------------------------------
-# Model Selection
-# ------------------------------
-task = st.selectbox(
-    "Choose a task:",
-    ["Build Model", "Train Model", "Evaluate Model", "Make Prediction"]
-)
+        # Classification
+        if prediction >= 0.5:
+            st.success(f"🌟 Positive Review (Confidence: {prediction:.2f})")
+        else:
+            st.error(f"👎 Negative Review (Confidence: {1 - prediction:.2f})")
 
-# ------------------------------
-# Define Model
-# ------------------------------
-if task == "Build Model":
-    model = Sequential([
-        Embedding(10000, 128, input_length=200),
-        LSTM(128, dropout=0.2, recurrent_dropout=0.2),
-        Dense(1, activation="sigmoid")
-    ])
-    model.compile(loss="binary_crossentropy", optimizer="adam", metrics=["accuracy"])
-    st.success("✅ Model built successfully")
-
-elif task == "Train Model":
-    st.write("⚡ Training in progress (this may take time)...")
-    # You can add callbacks and epochs here
-    # Example:
-    # history = model.fit(X_train, y_train, epochs=3, batch_size=64, validation_split=0.2)
-    st.warning("Training code is not executed in Streamlit yet. Add it here if needed.")
-
-elif task == "Evaluate Model":
-    st.write("📊 Model evaluation placeholder.")
-    # Example: loss, acc = model.evaluate(X_test, y_test)
-    # st.write("Test Accuracy:", acc)
-
-elif task == "Make Prediction":
-    user_review = st.text_input("✍️ Enter a review for sentiment analysis:")
-    if user_review:
-        st.write("🔎 Processing input...")
-        # Tokenization and preprocessing would go here
-        st.info("Prediction pipeline not fully implemented yet.")
+        # Debug info
+        st.write("🔍 Encoded tokens (first 30):", encoded[:30])
+        st.write("🔍 Decoded back:", decode_review(encoded[:30]))
